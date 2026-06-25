@@ -26,7 +26,8 @@ static class AudioProcessor
 {
     // Public interface
 
-    public static void Process(AudioClip clip, ProcessingOptions opts, string outputPath)
+    public static (float[] samples, int channels, int sampleRate)
+        ProcessToSamples(AudioClip clip, ProcessingOptions opts)
     {
         var channels   = clip.channels;
         var sampleRate = clip.frequency;
@@ -38,7 +39,7 @@ static class AudioProcessor
             EditorUtility.DisplayDialog("Audio Tailor",
                 "Failed to read audio data. The clip may be compressed or streaming.",
                 "OK");
-            return;
+            return (null, 0, 0);
         }
 
         float[] samples;
@@ -65,8 +66,18 @@ static class AudioProcessor
         if (opts.makeLoop)
             samples = MakeLoop(samples, outChannels, sampleRate, opts.crossfadeDuration);
 
-        WriteWav(outputPath, samples, outChannels, sampleRate);
+        return (samples, outChannels, sampleRate);
     }
+
+    public static void Process(AudioClip clip, ProcessingOptions opts, string outputPath)
+    {
+        var (samples, channels, sampleRate) = ProcessToSamples(clip, opts);
+        if (samples != null)
+            WriteWav(outputPath, samples, channels, sampleRate);
+    }
+
+    internal static void SaveToFile(string assetPath, float[] samples, int channels, int sampleRate)
+        => WriteWav(assetPath, samples, channels, sampleRate);
 
     // Private processing steps
 

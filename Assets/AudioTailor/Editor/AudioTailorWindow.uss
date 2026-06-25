@@ -1,0 +1,57 @@
+.root {
+    padding: 4px;
+    flex-grow: 1;
+}
+
+.waveform-container {
+    height: 80px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    overflow: hidden;
+    background-color: rgb(38, 38, 38);
+}
+
+.waveform-image {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: white;
+    display: none;
+}
+
+.button-row {
+    flex-direction: row;
+    justify-content: center;
+    margin-bottom: 4px;
+}
+
+.section-label {
+    -unity-font-style: bold;
+    margin-top: 4px;
+}
+
+.sub-options {
+    padding-left: 16px;
+}
+
+.spacer {
+    height: 8px;
+}
+
+.save-reset-row {
+    flex-direction: row;
+    display: none;
+}
+
+.flex-grow {
+    flex-grow: 1;
+}

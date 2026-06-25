@@ -1,5 +1,7 @@
 using UnityEngine;
 using UnityEditor;
+using UnityEngine.UIElements;
+using UnityEditor.UIElements;
 
 namespace AudioTailor.Editor
 {
@@ -22,7 +24,7 @@ sealed class AudioTailorWindow : EditorWindow
 
     [SerializeField] bool _convertMono;
 
-    // Preview state
+    // Runtime state
 
     AudioClip _previewClip;
     float[] _processedSamples;
@@ -33,6 +35,15 @@ sealed class AudioTailorWindow : EditorWindow
 
     GameObject _previewObject;
     float _playbackTime;
+
+    // UI references
+
+    ObjectField _clipField;
+    Button _processBtn;
+    VisualElement _waveformContainer;
+    Image _waveformImage;
+    VisualElement _playheadElement;
+    VisualElement _saveResetRow;
 
     // Waveform cache
 
@@ -52,9 +63,12 @@ sealed class AudioTailorWindow : EditorWindow
         if (w._sourceClip == clip) return;
         w._sourceClip = clip;
         w.ResetPreview();
+        w._clipField?.SetValueWithoutNotify(clip);
+        w._processBtn?.SetEnabled(clip != null);
+        w.InvalidateWaveform();
     }
 
-    // EditorWindow implementation
+    // EditorWindow
 
     void OnDestroy()
     {
@@ -63,130 +77,139 @@ sealed class AudioTailorWindow : EditorWindow
         if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
     }
 
-    void OnGUI()
+    void CreateGUI()
     {
-        EditorGUILayout.Space();
+        var uxml = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
+            "Assets/AudioTailor/Editor/AudioTailorWindow.uxml");
+        uxml.CloneTree(rootVisualElement);
 
-        EditorGUI.BeginChangeCheck();
-        _sourceClip = (AudioClip)EditorGUILayout.ObjectField(
-            "Source Clip", _sourceClip, typeof(AudioClip), false);
-        if (EditorGUI.EndChangeCheck())
+        var root = rootVisualElement;
+
+        // Source clip
+        _clipField = root.Q<ObjectField>("clip-field");
+        _clipField.objectType = typeof(AudioClip);
+        _clipField.SetValueWithoutNotify(_sourceClip);
+        _clipField.RegisterValueChangedCallback(e =>
+        {
+            _sourceClip = (AudioClip)e.newValue;
             ResetPreview();
+            InvalidateWaveform();
+        });
 
-        DrawWaveformArea();
-        DrawPlaybackControls(_previewClip != null ? _previewClip : _sourceClip);
+        // Waveform
+        _waveformContainer = root.Q("waveform-container");
+        _waveformImage = root.Q<Image>("waveform-image");
+        _waveformImage.scaleMode = ScaleMode.StretchToFill;
+        _waveformContainer.RegisterCallback<GeometryChangedEvent>(
+            e => UpdateWaveform(e.newRect.width));
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Processing", EditorStyles.boldLabel);
-        DrawOptions();
+        _playheadElement = root.Q("playhead");
 
-        EditorGUILayout.Space();
-        DrawActionButtons();
+        // Playback buttons
+        root.Q<Button>("play-btn").clicked += () => PlayPreview(_previewClip ?? _sourceClip);
+        root.Q<Button>("stop-btn").clicked += StopPreview;
+
+        // Options
+        WireToggleGroup(root, "trim-toggle",      "trim-options",      _trimSilence, v => _trimSilence = v);
+        WireToggleGroup(root, "normalize-toggle", "normalize-options", _normalize,   v => _normalize   = v);
+        WireToggleGroup(root, "loop-toggle",      "loop-options",      _makeLoop,    v => _makeLoop    = v);
+
+        WireFloatField(root, "silence-threshold-field",  _silenceThresholdDb, v => _silenceThresholdDb = v);
+        WireFloatField(root, "release-threshold-field",  _releaseThresholdDb, v => _releaseThresholdDb = v);
+        WireFloatField(root, "target-level-field",       _targetLevelDb,      v => _targetLevelDb      = v);
+        WireFloatField(root, "crossfade-duration-field", _crossfadeDuration,  v => _crossfadeDuration  = v);
+
+        var monoToggle = root.Q<Toggle>("mono-toggle");
+        monoToggle.SetValueWithoutNotify(_convertMono);
+        monoToggle.RegisterValueChangedCallback(e => _convertMono = e.newValue);
+
+        // Action buttons
+        _processBtn = root.Q<Button>("process-btn");
+        _processBtn.clicked += RunProcess;
+        _processBtn.SetEnabled(_sourceClip != null);
+        _clipField.RegisterValueChangedCallback(e => _processBtn.SetEnabled(e.newValue != null));
+
+        root.Q<Button>("save-btn").clicked  += RunSave;
+        root.Q<Button>("reset-btn").clicked += ResetPreview;
+
+        _saveResetRow = root.Q("save-reset-row");
     }
 
-    // Private UI sections
+    // UI helpers
 
-    void DrawWaveformArea()
+    static void WireToggleGroup(VisualElement root, string toggleName, string optionsName,
+        bool initialValue, System.Action<bool> onToggle)
     {
-        var rect = GUILayoutUtility.GetRect(0, WaveformHeight, GUILayout.ExpandWidth(true));
-        if (Event.current.type != EventType.Repaint) return;
+        var toggle  = root.Q<Toggle>(toggleName);
+        var options = root.Q(optionsName);
+        toggle.SetValueWithoutNotify(initialValue);
+        options.style.display = initialValue ? DisplayStyle.Flex : DisplayStyle.None;
+        toggle.RegisterValueChangedCallback(e =>
+        {
+            onToggle(e.newValue);
+            options.style.display = e.newValue ? DisplayStyle.Flex : DisplayStyle.None;
+        });
+    }
 
-        if (rect.width > 1)
+    static void WireFloatField(VisualElement root, string name, float initialValue,
+        System.Action<float> onChange)
+    {
+        var field = root.Q<FloatField>(name);
+        field.SetValueWithoutNotify(initialValue);
+        field.RegisterValueChangedCallback(e => onChange(e.newValue));
+    }
+
+    // Waveform
+
+    void UpdateWaveform(float width)
+    {
+        var w      = (int)width;
+        var newKey = _processedSamples != null ? (object)_processedSamples : (object)_sourceClip;
+
+        if (w > 0 && _waveformTexture != null && _waveformKey == newKey &&
+            Mathf.Abs(_waveformTexture.width - w) <= 1)
+            return;
+
+        if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
+        _waveformTexture = null;
+        _waveformKey     = newKey;
+
+        if (w > 0)
         {
             if (_processedSamples != null)
-            {
-                if (_waveformTexture == null || _waveformKey != (object)_processedSamples ||
-                    Mathf.Abs(_waveformTexture.width - (int)rect.width) > 1)
-                {
-                    if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
-                    _waveformTexture = RenderWaveformFromSamples(
-                        _processedSamples, _processedChannels, (int)rect.width, WaveformHeight);
-                    _waveformKey = _processedSamples;
-                }
-            }
+                _waveformTexture = RenderWaveformFromSamples(
+                    _processedSamples, _processedChannels, w, WaveformHeight);
             else if (_sourceClip != null)
-            {
-                if (_waveformTexture == null || _waveformKey != (object)_sourceClip ||
-                    Mathf.Abs(_waveformTexture.width - (int)rect.width) > 1)
-                {
-                    if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
-                    _waveformTexture = RenderWaveform(_sourceClip, (int)rect.width, WaveformHeight);
-                    _waveformKey = (object)_sourceClip;
-                }
-            }
+                _waveformTexture = RenderWaveform(_sourceClip, w, WaveformHeight);
         }
 
-        if (_waveformTexture != null)
-            GUI.DrawTexture(rect, _waveformTexture, ScaleMode.StretchToFill);
-        else
-            EditorGUI.DrawRect(rect, new Color(0.15f, 0.15f, 0.15f));
+        _waveformImage.image = _waveformTexture;
+    }
 
-        var displayClip = _previewClip != null ? _previewClip : _sourceClip;
+    void InvalidateWaveform()
+    {
+        if (_waveformTexture != null) { DestroyImmediate(_waveformTexture); _waveformTexture = null; }
+        _waveformKey = null;
+        if (_waveformImage != null) _waveformImage.image = null;
+        if (_waveformContainer != null)
+            UpdateWaveform(_waveformContainer.contentRect.width);
+    }
+
+    // Playhead
+
+    void UpdatePlayhead()
+    {
+        if (_playheadElement == null) return;
+        var displayClip = _previewClip ?? _sourceClip;
         if (_previewObject != null && displayClip != null && displayClip.length > 0)
         {
-            var x = rect.x + (_playbackTime / displayClip.length) * rect.width;
-            EditorGUI.DrawRect(new Rect(Mathf.Clamp(x, rect.x, rect.xMax - 1), rect.y, 1, rect.height),
-                Color.white);
+            var t = Mathf.Clamp01(_playbackTime / displayClip.length);
+            _playheadElement.style.left    = _waveformContainer.contentRect.width * t;
+            _playheadElement.style.display = DisplayStyle.Flex;
         }
-    }
-
-    void DrawPlaybackControls(AudioClip clip)
-    {
-        using (new EditorGUI.DisabledScope(clip == null))
+        else
         {
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("▶ Play")) PlayPreview(clip);
-            if (GUILayout.Button("■ Stop")) StopPreview();
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-        }
-    }
-
-    void DrawOptions()
-    {
-        _trimSilence = EditorGUILayout.ToggleLeft("Trim Silence", _trimSilence);
-        if (_trimSilence)
-        {
-            EditorGUI.indentLevel++;
-            _silenceThresholdDb = EditorGUILayout.FloatField("Silence Threshold (dB)", _silenceThresholdDb);
-            _releaseThresholdDb = EditorGUILayout.FloatField("Release Threshold (dB)", _releaseThresholdDb);
-            EditorGUI.indentLevel--;
-        }
-
-        _normalize = EditorGUILayout.ToggleLeft("Normalize", _normalize);
-        if (_normalize)
-        {
-            EditorGUI.indentLevel++;
-            _targetLevelDb = EditorGUILayout.FloatField("Target Level (dB)", _targetLevelDb);
-            EditorGUI.indentLevel--;
-        }
-
-        _makeLoop = EditorGUILayout.ToggleLeft("Make Loop", _makeLoop);
-        if (_makeLoop)
-        {
-            EditorGUI.indentLevel++;
-            _crossfadeDuration = EditorGUILayout.FloatField("Crossfade Duration (sec)", _crossfadeDuration);
-            EditorGUI.indentLevel--;
-        }
-
-        _convertMono = EditorGUILayout.ToggleLeft("Convert to Mono", _convertMono);
-    }
-
-    void DrawActionButtons()
-    {
-        using (new EditorGUI.DisabledScope(_sourceClip == null))
-        {
-            if (GUILayout.Button("Process"))
-                RunProcess();
-        }
-
-        if (_previewClip != null)
-        {
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Save"))  RunSave();
-            if (GUILayout.Button("Reset")) ResetPreview();
-            EditorGUILayout.EndHorizontal();
+            _playheadElement.style.display = DisplayStyle.None;
         }
     }
 
@@ -219,9 +242,8 @@ sealed class AudioTailorWindow : EditorWindow
             _processedChannels, _processedSampleRate, false);
         _previewClip.SetData(_processedSamples, 0);
 
-        if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
-        _waveformTexture = null;
-        _waveformKey     = null;
+        if (_saveResetRow != null) _saveResetRow.style.display = DisplayStyle.Flex;
+        InvalidateWaveform();
     }
 
     void RunSave()
@@ -248,8 +270,53 @@ sealed class AudioTailorWindow : EditorWindow
         _processedSamples    = null;
         _processedChannels   = 0;
         _processedSampleRate = 0;
-        if (_waveformTexture != null) { DestroyImmediate(_waveformTexture); _waveformTexture = null; }
-        _waveformKey = null;
+
+        if (_saveResetRow != null) _saveResetRow.style.display = DisplayStyle.None;
+        InvalidateWaveform();
+    }
+
+    // Playback via hidden AudioSource (works with runtime AudioClip.Create clips)
+
+    void PlayPreview(AudioClip clip)
+    {
+        StopPreview();
+        if (clip == null) return;
+
+        _previewObject = new GameObject("AudioTailorPreview")
+            { hideFlags = HideFlags.HideAndDontSave };
+        var source = _previewObject.AddComponent<AudioSource>();
+        source.spatialBlend = 0;
+        source.clip = clip;
+        source.Play();
+
+        EditorApplication.update += CheckPlaybackFinished;
+    }
+
+    void StopPreview()
+    {
+        EditorApplication.update -= CheckPlaybackFinished;
+        _playbackTime = 0;
+        if (_previewObject == null) return;
+        DestroyImmediate(_previewObject);
+        _previewObject = null;
+        UpdatePlayhead();
+    }
+
+    void CheckPlaybackFinished()
+    {
+        if (_previewObject == null)
+        {
+            EditorApplication.update -= CheckPlaybackFinished;
+            return;
+        }
+        var source = _previewObject.GetComponent<AudioSource>();
+        if (!source.isPlaying)
+        {
+            StopPreview();
+            return;
+        }
+        _playbackTime = source.time;
+        UpdatePlayhead();
     }
 
     // Waveform rendering
@@ -292,50 +359,6 @@ sealed class AudioTailorWindow : EditorWindow
         var samples = new float[clip.samples * clip.channels];
         if (!clip.GetData(samples, 0)) return null;
         return RenderWaveformFromSamples(samples, clip.channels, width, height);
-    }
-
-    // Playback via hidden AudioSource (works with runtime AudioClip.Create clips)
-
-    void PlayPreview(AudioClip clip)
-    {
-        StopPreview();
-        if (clip == null) return;
-
-        _previewObject = new GameObject("AudioTailorPreview")
-            { hideFlags = HideFlags.HideAndDontSave };
-        var source = _previewObject.AddComponent<AudioSource>();
-        source.spatialBlend = 0;
-        source.clip = clip;
-        source.Play();
-
-        EditorApplication.update += CheckPlaybackFinished;
-    }
-
-    void StopPreview()
-    {
-        EditorApplication.update -= CheckPlaybackFinished;
-        _playbackTime = 0;
-        if (_previewObject == null) return;
-        DestroyImmediate(_previewObject);
-        _previewObject = null;
-        Repaint();
-    }
-
-    void CheckPlaybackFinished()
-    {
-        if (_previewObject == null)
-        {
-            EditorApplication.update -= CheckPlaybackFinished;
-            return;
-        }
-        var source = _previewObject.GetComponent<AudioSource>();
-        if (!source.isPlaying)
-        {
-            StopPreview();
-            return;
-        }
-        _playbackTime = source.time;
-        Repaint();
     }
 }
 

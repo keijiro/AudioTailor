@@ -12,15 +12,15 @@ sealed class AudioTailorWindow : EditorWindow
 
     [SerializeField] AudioClip _sourceClip;
 
-    [SerializeField] bool _trimSilence;
+    [SerializeField] bool _trimSilence = true;
     [SerializeField] float _silenceThresholdDb = -60;
     [SerializeField] float _releaseThresholdDb = -30;
 
-    [SerializeField] bool _normalize;
+    [SerializeField] bool _normalize = true;
     [SerializeField] float _targetLevelDb = -0.1f;
 
     [SerializeField] bool _makeLoop;
-    [SerializeField] float _crossfadeDuration = 0.1f;
+    [SerializeField] int _crossfadePct = 10;
 
     [SerializeField] bool _convertMono;
 
@@ -43,7 +43,7 @@ sealed class AudioTailorWindow : EditorWindow
     VisualElement _waveformContainer;
     Image _waveformImage;
     VisualElement _playheadElement;
-    VisualElement _saveResetRow;
+    Button _saveBtn;
 
     // Waveform cache
 
@@ -53,7 +53,7 @@ sealed class AudioTailorWindow : EditorWindow
 
     // Entry points
 
-    [MenuItem("Window/Audio Tailor")]
+    [MenuItem("Window/Audio/Audio Tailor")]
     static void OpenEmpty() => GetWindow<AudioTailorWindow>("Audio Tailor");
 
     public static void Open(AudioClip clip)
@@ -113,10 +113,10 @@ sealed class AudioTailorWindow : EditorWindow
         WireToggleGroup(root, "normalize-toggle", "normalize-options", _normalize,   v => _normalize   = v);
         WireToggleGroup(root, "loop-toggle",      "loop-options",      _makeLoop,    v => _makeLoop    = v);
 
-        WireFloatField(root, "silence-threshold-field",  _silenceThresholdDb, v => _silenceThresholdDb = v);
-        WireFloatField(root, "release-threshold-field",  _releaseThresholdDb, v => _releaseThresholdDb = v);
-        WireFloatField(root, "target-level-field",       _targetLevelDb,      v => _targetLevelDb      = v);
-        WireFloatField(root, "crossfade-duration-field", _crossfadeDuration,  v => _crossfadeDuration  = v);
+        WireSlider(root, "silence-threshold-field",  _silenceThresholdDb, v => _silenceThresholdDb = v);
+        WireSlider(root, "release-threshold-field",  _releaseThresholdDb, v => _releaseThresholdDb = v);
+        WireSlider(root, "target-level-field",       _targetLevelDb,      v => _targetLevelDb      = v);
+        WireSliderInt(root, "crossfade-pct-field", _crossfadePct, v => _crossfadePct = v);
 
         var monoToggle = root.Q<Toggle>("mono-toggle");
         monoToggle.SetValueWithoutNotify(_convertMono);
@@ -128,10 +128,9 @@ sealed class AudioTailorWindow : EditorWindow
         _processBtn.SetEnabled(_sourceClip != null);
         _clipField.RegisterValueChangedCallback(e => _processBtn.SetEnabled(e.newValue != null));
 
-        root.Q<Button>("save-btn").clicked  += RunSave;
-        root.Q<Button>("reset-btn").clicked += ResetPreview;
-
-        _saveResetRow = root.Q("save-reset-row");
+        _saveBtn = root.Q<Button>("save-btn");
+        _saveBtn.clicked += RunSave;
+        _saveBtn.SetEnabled(false);
     }
 
     // UI helpers
@@ -150,10 +149,18 @@ sealed class AudioTailorWindow : EditorWindow
         });
     }
 
-    static void WireFloatField(VisualElement root, string name, float initialValue,
+    static void WireSlider(VisualElement root, string name, float initialValue,
         System.Action<float> onChange)
     {
-        var field = root.Q<FloatField>(name);
+        var field = root.Q<Slider>(name);
+        field.SetValueWithoutNotify(initialValue);
+        field.RegisterValueChangedCallback(e => onChange(e.newValue));
+    }
+
+    static void WireSliderInt(VisualElement root, string name, int initialValue,
+        System.Action<int> onChange)
+    {
+        var field = root.Q<SliderInt>(name);
         field.SetValueWithoutNotify(initialValue);
         field.RegisterValueChangedCallback(e => onChange(e.newValue));
     }
@@ -228,7 +235,7 @@ sealed class AudioTailorWindow : EditorWindow
             normalize          = _normalize,
             targetLevelDb      = _targetLevelDb,
             makeLoop           = _makeLoop,
-            crossfadeDuration  = _crossfadeDuration,
+            crossfadeDuration  = _crossfadePct / 100f * _sourceClip.length,
             convertMono        = _convertMono,
         };
 
@@ -245,7 +252,7 @@ sealed class AudioTailorWindow : EditorWindow
             _processedChannels, _processedSampleRate, false);
         _previewClip.SetData(_processedSamples, 0);
 
-        if (_saveResetRow != null) _saveResetRow.style.display = DisplayStyle.Flex;
+        if (_saveBtn != null) _saveBtn.SetEnabled(true);
         InvalidateWaveform();
     }
 
@@ -274,7 +281,7 @@ sealed class AudioTailorWindow : EditorWindow
         _processedChannels   = 0;
         _processedSampleRate = 0;
 
-        if (_saveResetRow != null) _saveResetRow.style.display = DisplayStyle.None;
+        if (_saveBtn != null) _saveBtn.SetEnabled(false);
         InvalidateWaveform();
     }
 
@@ -289,6 +296,7 @@ sealed class AudioTailorWindow : EditorWindow
             { hideFlags = HideFlags.HideAndDontSave };
         var source = _previewObject.AddComponent<AudioSource>();
         source.spatialBlend = 0;
+        source.loop = _makeLoop;
         source.clip = clip;
         source.Play();
 

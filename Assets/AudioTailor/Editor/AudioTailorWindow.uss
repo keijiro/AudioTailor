@@ -3,6 +3,20 @@
     flex-grow: 1;
 }
 
+.unity-base-field {
+    margin-bottom: 3px;
+}
+
+.unity-base-field__label {
+    min-width: 180px;
+    width: 180px;
+}
+
+.sub-options .unity-base-field__label {
+    min-width: 164px;
+    width: 164px;
+}
+
 .waveform-container {
     flex-grow: 1;
     margin-top: 4px;
@@ -34,24 +48,17 @@
     margin-bottom: 4px;
 }
 
-.section-label {
-    -unity-font-style: bold;
-    margin-top: 4px;
-}
 
 .sub-options {
     padding-left: 16px;
 }
 
-.spacer {
-    height: 8px;
-}
-
-.save-reset-row {
+.action-row {
     flex-direction: row;
-    display: none;
+    justify-content: flex-end;
+    margin-top: 8px;
 }
 
-.flex-grow {
-    flex-grow: 1;
+.action-btn {
+    width: 72px;
 }

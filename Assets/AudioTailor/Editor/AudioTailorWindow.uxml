@@ -13,39 +13,33 @@
             <ui:Button name="stop-btn" text="■ Stop" />
         </ui:VisualElement>
 
-        <ui:Label text="Processing" class="section-label" />
-
         <ui:VisualElement>
             <ui:Toggle name="trim-toggle" label="Trim Silence" />
             <ui:VisualElement name="trim-options" class="sub-options">
-                <uie:FloatField name="silence-threshold-field" label="Silence Threshold (dB)" />
-                <uie:FloatField name="release-threshold-field" label="Release Threshold (dB)" />
+                <ui:Slider name="silence-threshold-field" label="Silence Threshold (dB)" low-value="-80" high-value="-10" show-input-field="true" />
+                <ui:Slider name="release-threshold-field" label="Release Threshold (dB)" low-value="-80" high-value="-10" show-input-field="true" />
             </ui:VisualElement>
         </ui:VisualElement>
 
         <ui:VisualElement>
             <ui:Toggle name="normalize-toggle" label="Normalize" />
             <ui:VisualElement name="normalize-options" class="sub-options">
-                <uie:FloatField name="target-level-field" label="Target Level (dB)" />
+                <ui:Slider name="target-level-field" label="Target Level (dB)" low-value="-8" high-value="0" show-input-field="true" />
             </ui:VisualElement>
         </ui:VisualElement>
 
         <ui:VisualElement>
             <ui:Toggle name="loop-toggle" label="Make Loop" />
             <ui:VisualElement name="loop-options" class="sub-options">
-                <uie:FloatField name="crossfade-duration-field" label="Crossfade Duration (sec)" />
+                <ui:SliderInt name="crossfade-pct-field" label="Crossfade (%)" low-value="0" high-value="100" show-input-field="true" />
             </ui:VisualElement>
         </ui:VisualElement>
 
         <ui:Toggle name="mono-toggle" label="Convert to Mono" />
 
-        <ui:VisualElement class="spacer" />
-
-        <ui:Button name="process-btn" text="Process" />
-
-        <ui:VisualElement name="save-reset-row" class="save-reset-row">
-            <ui:Button name="save-btn" text="Save" class="flex-grow" />
-            <ui:Button name="reset-btn" text="Reset" class="flex-grow" />
+        <ui:VisualElement class="action-row">
+            <ui:Button name="process-btn" text="Process" class="action-btn" />
+            <ui:Button name="save-btn" text="Save" class="action-btn" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

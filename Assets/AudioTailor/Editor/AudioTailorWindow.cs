@@ -32,6 +32,7 @@ sealed class AudioTailorWindow : EditorWindow
     // Playback
 
     GameObject _previewObject;
+    float _playbackTime;
 
     // Waveform cache
 
@@ -119,6 +120,14 @@ sealed class AudioTailorWindow : EditorWindow
             GUI.DrawTexture(rect, _waveformTexture, ScaleMode.StretchToFill);
         else
             EditorGUI.DrawRect(rect, new Color(0.15f, 0.15f, 0.15f));
+
+        var displayClip = _previewClip != null ? _previewClip : _sourceClip;
+        if (_previewObject != null && displayClip != null && displayClip.length > 0)
+        {
+            var x = rect.x + (_playbackTime / displayClip.length) * rect.width;
+            EditorGUI.DrawRect(new Rect(Mathf.Clamp(x, rect.x, rect.xMax - 1), rect.y, 1, rect.height),
+                Color.white);
+        }
     }
 
     void DrawPlaybackControls(AudioClip clip)
@@ -305,9 +314,11 @@ sealed class AudioTailorWindow : EditorWindow
     void StopPreview()
     {
         EditorApplication.update -= CheckPlaybackFinished;
+        _playbackTime = 0;
         if (_previewObject == null) return;
         DestroyImmediate(_previewObject);
         _previewObject = null;
+        Repaint();
     }
 
     void CheckPlaybackFinished()
@@ -317,8 +328,14 @@ sealed class AudioTailorWindow : EditorWindow
             EditorApplication.update -= CheckPlaybackFinished;
             return;
         }
-        if (!_previewObject.GetComponent<AudioSource>().isPlaying)
+        var source = _previewObject.GetComponent<AudioSource>();
+        if (!source.isPlaying)
+        {
             StopPreview();
+            return;
+        }
+        _playbackTime = source.time;
+        Repaint();
     }
 }
 

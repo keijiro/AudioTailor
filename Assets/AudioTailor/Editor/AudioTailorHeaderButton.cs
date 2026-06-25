@@ -17,6 +17,7 @@ static class AudioTailorHeaderButton
         var clip = AssetDatabase.LoadAssetAtPath<AudioClip>(importer.assetPath);
         if (clip == null) return;
 
+        EditorGUILayout.Space(1);
         EditorGUILayout.BeginHorizontal();
         GUILayout.FlexibleSpace();
         if (GUILayout.Button("Audio Tailor"))

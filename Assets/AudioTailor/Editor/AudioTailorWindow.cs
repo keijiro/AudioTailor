@@ -14,7 +14,7 @@ sealed class AudioTailorWindow : EditorWindow
 
     [SerializeField] bool _trimSilence;
     [SerializeField] float _silenceThresholdDb = -60;
-    [SerializeField] float _releaseThresholdDb = -40;
+    [SerializeField] float _releaseThresholdDb = -30;
 
     [SerializeField] bool _normalize;
     [SerializeField] float _targetLevelDb = -0.1f;
@@ -50,7 +50,6 @@ sealed class AudioTailorWindow : EditorWindow
     Texture2D _waveformTexture;
     object _waveformKey;
 
-    const int WaveformHeight = 80;
 
     // Entry points
 
@@ -101,7 +100,7 @@ sealed class AudioTailorWindow : EditorWindow
         _waveformImage = root.Q<Image>("waveform-image");
         _waveformImage.scaleMode = ScaleMode.StretchToFill;
         _waveformContainer.RegisterCallback<GeometryChangedEvent>(
-            e => UpdateWaveform(e.newRect.width));
+            e => UpdateWaveform(e.newRect.width, (int)e.newRect.height));
 
         _playheadElement = root.Q("playhead");
 
@@ -161,26 +160,27 @@ sealed class AudioTailorWindow : EditorWindow
 
     // Waveform
 
-    void UpdateWaveform(float width)
+    void UpdateWaveform(float width, int height)
     {
         var w      = (int)width;
         var newKey = _processedSamples != null ? (object)_processedSamples : (object)_sourceClip;
 
-        if (w > 0 && _waveformTexture != null && _waveformKey == newKey &&
-            Mathf.Abs(_waveformTexture.width - w) <= 1)
+        if (w > 0 && height > 0 && _waveformTexture != null && _waveformKey == newKey &&
+            Mathf.Abs(_waveformTexture.width  - w)      <= 1 &&
+            Mathf.Abs(_waveformTexture.height - height) <= 1)
             return;
 
         if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
         _waveformTexture = null;
         _waveformKey     = newKey;
 
-        if (w > 0)
+        if (w > 0 && height > 0)
         {
             if (_processedSamples != null)
                 _waveformTexture = RenderWaveformFromSamples(
-                    _processedSamples, _processedChannels, w, WaveformHeight);
+                    _processedSamples, _processedChannels, w, height);
             else if (_sourceClip != null)
-                _waveformTexture = RenderWaveform(_sourceClip, w, WaveformHeight);
+                _waveformTexture = RenderWaveform(_sourceClip, w, height);
         }
 
         _waveformImage.image = _waveformTexture;
@@ -192,7 +192,10 @@ sealed class AudioTailorWindow : EditorWindow
         _waveformKey = null;
         if (_waveformImage != null) _waveformImage.image = null;
         if (_waveformContainer != null)
-            UpdateWaveform(_waveformContainer.contentRect.width);
+        {
+            var r = _waveformContainer.contentRect;
+            UpdateWaveform(r.width, (int)r.height);
+        }
     }
 
     // Playhead

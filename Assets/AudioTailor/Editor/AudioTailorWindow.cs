@@ -1,4 +1,3 @@
-using System.Reflection;
 using UnityEngine;
 using UnityEditor;
 
@@ -25,32 +24,21 @@ sealed class AudioTailorWindow : EditorWindow
 
     // Preview state
 
-    AudioClip _previewClip;         // asset-backed temp clip for PlayPreviewClip
+    AudioClip _previewClip;
     float[] _processedSamples;
     int _processedChannels;
     int _processedSampleRate;
 
+    // Playback
+
+    GameObject _previewObject;
+
     // Waveform cache
 
     Texture2D _waveformTexture;
-    object _waveformKey;            // float[] or AudioClip ref used as cache key
+    object _waveformKey;
 
     const int WaveformHeight = 80;
-
-    // Temp file used as an asset-backed preview clip
-    const string PreviewPath = "Assets/AudioTailor/__preview.wav";
-
-    // AudioUtil playback via reflection
-
-    static readonly MethodInfo s_PlayPreviewClip;
-    static readonly MethodInfo s_StopAllPreviewClips;
-
-    static AudioTailorWindow()
-    {
-        var au = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.AudioUtil");
-        s_PlayPreviewClip     = au?.GetMethod("PlayPreviewClip");
-        s_StopAllPreviewClips = au?.GetMethod("StopAllPreviewClips");
-    }
 
     // Entry points
 
@@ -70,9 +58,8 @@ sealed class AudioTailorWindow : EditorWindow
     void OnDestroy()
     {
         StopPreview();
+        if (_previewClip != null) DestroyImmediate(_previewClip);
         if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
-        if (AssetDatabase.AssetPathExists(PreviewPath))
-            AssetDatabase.DeleteAsset(PreviewPath);
     }
 
     void OnGUI()
@@ -118,12 +105,12 @@ sealed class AudioTailorWindow : EditorWindow
             }
             else if (_sourceClip != null)
             {
-                if (_waveformTexture == null || _waveformKey != (object)(UnityEngine.Object)_sourceClip ||
+                if (_waveformTexture == null || _waveformKey != (object)_sourceClip ||
                     Mathf.Abs(_waveformTexture.width - (int)rect.width) > 1)
                 {
                     if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
                     _waveformTexture = RenderWaveform(_sourceClip, (int)rect.width, WaveformHeight);
-                    _waveformKey = (object)(UnityEngine.Object)_sourceClip;
+                    _waveformKey = (object)_sourceClip;
                 }
             }
         }
@@ -217,10 +204,11 @@ sealed class AudioTailorWindow : EditorWindow
         _processedChannels   = channels;
         _processedSampleRate = sampleRate;
 
-        // Write to temp asset — PlayPreviewClip requires an asset-backed AudioClip
-        AudioProcessor.SaveToFile(PreviewPath, _processedSamples, _processedChannels, _processedSampleRate);
-        AssetDatabase.ImportAsset(PreviewPath, ImportAssetOptions.ForceUpdate);
-        _previewClip = AssetDatabase.LoadAssetAtPath<AudioClip>(PreviewPath);
+        if (_previewClip != null) DestroyImmediate(_previewClip);
+        _previewClip = AudioClip.Create("Preview",
+            _processedSamples.Length / _processedChannels,
+            _processedChannels, _processedSampleRate, false);
+        _previewClip.SetData(_processedSamples, 0);
 
         if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
         _waveformTexture = null;
@@ -247,7 +235,7 @@ sealed class AudioTailorWindow : EditorWindow
     void ResetPreview()
     {
         StopPreview();
-        _previewClip         = null;
+        if (_previewClip != null) { DestroyImmediate(_previewClip); _previewClip = null; }
         _processedSamples    = null;
         _processedChannels   = 0;
         _processedSampleRate = 0;
@@ -297,21 +285,41 @@ sealed class AudioTailorWindow : EditorWindow
         return RenderWaveformFromSamples(samples, clip.channels, width, height);
     }
 
-    // Playback
+    // Playback via hidden AudioSource (works with runtime AudioClip.Create clips)
 
-    static void PlayPreview(AudioClip clip)
+    void PlayPreview(AudioClip clip)
     {
-        if (s_PlayPreviewClip == null || clip == null) return;
-        var p    = s_PlayPreviewClip.GetParameters();
-        var args = new object[p.Length];
-        args[0] = clip;
-        if (p.Length > 1) args[1] = 0;
-        if (p.Length > 2) args[2] = false;
-        s_PlayPreviewClip.Invoke(null, args);
+        StopPreview();
+        if (clip == null) return;
+
+        _previewObject = new GameObject("AudioTailorPreview")
+            { hideFlags = HideFlags.HideAndDontSave };
+        var source = _previewObject.AddComponent<AudioSource>();
+        source.spatialBlend = 0;
+        source.clip = clip;
+        source.Play();
+
+        EditorApplication.update += CheckPlaybackFinished;
     }
 
-    static void StopPreview()
-        => s_StopAllPreviewClips?.Invoke(null, null);
+    void StopPreview()
+    {
+        EditorApplication.update -= CheckPlaybackFinished;
+        if (_previewObject == null) return;
+        DestroyImmediate(_previewObject);
+        _previewObject = null;
+    }
+
+    void CheckPlaybackFinished()
+    {
+        if (_previewObject == null)
+        {
+            EditorApplication.update -= CheckPlaybackFinished;
+            return;
+        }
+        if (!_previewObject.GetComponent<AudioSource>().isPlaying)
+            StopPreview();
+    }
 }
 
 } // namespace AudioTailor.Editor

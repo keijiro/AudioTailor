@@ -3,10 +3,6 @@
     flex-grow: 1;
 }
 
-.unity-base-field {
-    margin-bottom: 3px;
-}
-
 .unity-base-field__label {
     min-width: 180px;
     width: 180px;

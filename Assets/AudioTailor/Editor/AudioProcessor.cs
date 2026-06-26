@@ -17,6 +17,7 @@ struct ProcessingOptions
     public float targetLevelDb;
 
     public bool makeLoop;
+    public int preTrimMs;
     public float crossfadeDuration;
 
     public bool convertMono;
@@ -64,7 +65,7 @@ static class AudioProcessor
             samples = Normalize(samples, opts.targetLevelDb);
 
         if (opts.makeLoop)
-            samples = MakeLoop(samples, outChannels, sampleRate, opts.crossfadeDuration);
+            samples = MakeLoop(samples, outChannels, sampleRate, opts.preTrimMs, opts.crossfadeDuration);
 
         return (samples, outChannels, sampleRate);
     }
@@ -157,22 +158,36 @@ static class AudioProcessor
         return samples;
     }
 
-    static float[] MakeLoop(float[] samples, int channels, int sampleRate, float crossfadeDuration)
+    static float[] MakeLoop(float[] samples, int channels, int sampleRate, int preTrimMs, float crossfadeDuration)
     {
-        var frameCount  = samples.Length / channels;
+        var frameCount = samples.Length / channels;
+
+        // Trim start and end before crossfading
+        var preTrimFrames = Math.Min((int)(preTrimMs / 1000f * sampleRate), frameCount / 4);
+        if (preTrimFrames > 0)
+        {
+            var trimmedFrames = frameCount - 2 * preTrimFrames;
+            var trimmed = new float[trimmedFrames * channels];
+            Array.Copy(samples, preTrimFrames * channels, trimmed, 0, trimmedFrames * channels);
+            samples    = trimmed;
+            frameCount = trimmedFrames;
+        }
+
         var crossFrames = Math.Min((int)(crossfadeDuration * sampleRate), frameCount / 2);
         if (crossFrames <= 0) return samples;
 
-        // Blend tail into head over the crossfade region
+        // Blend tail into head over the crossfade region (equal power)
         for (var f = 0; f < crossFrames; f++)
         {
-            var t         = (float)f / crossFrames;      // 0 → 1
+            var t         = (float)f / crossFrames * (MathF.PI / 2f);
+            var gainHead  = MathF.Sin(t);
+            var gainTail  = MathF.Cos(t);
             var tailFrame = frameCount - crossFrames + f;
             for (var c = 0; c < channels; c++)
             {
                 var head = samples[f         * channels + c];
                 var tail = samples[tailFrame * channels + c];
-                samples[f * channels + c] = head * t + tail * (1f - t);
+                samples[f * channels + c] = head * gainHead + tail * gainTail;
             }
         }
 

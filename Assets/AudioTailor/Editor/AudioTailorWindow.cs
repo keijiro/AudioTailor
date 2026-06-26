@@ -20,6 +20,7 @@ sealed class AudioTailorWindow : EditorWindow
     [SerializeField] float _targetLevelDb = -0.1f;
 
     [SerializeField] bool _makeLoop;
+    [SerializeField] int _preTrimMs;
     [SerializeField] int _crossfadePct = 10;
 
     [SerializeField] bool _convertMono;
@@ -116,6 +117,7 @@ sealed class AudioTailorWindow : EditorWindow
         WireSlider(root, "silence-threshold-field",  _silenceThresholdDb, v => _silenceThresholdDb = v);
         WireSlider(root, "release-threshold-field",  _releaseThresholdDb, v => _releaseThresholdDb = v);
         WireSlider(root, "target-level-field",       _targetLevelDb,      v => _targetLevelDb      = v);
+        WireSliderInt(root, "pre-trim-ms-field",   _preTrimMs,    v => _preTrimMs    = v);
         WireSliderInt(root, "crossfade-pct-field", _crossfadePct, v => _crossfadePct = v);
 
         var monoToggle = root.Q<Toggle>("mono-toggle");
@@ -235,6 +237,7 @@ sealed class AudioTailorWindow : EditorWindow
             normalize          = _normalize,
             targetLevelDb      = _targetLevelDb,
             makeLoop           = _makeLoop,
+            preTrimMs          = _preTrimMs,
             crossfadeDuration  = _crossfadePct / 100f * _sourceClip.length,
             convertMono        = _convertMono,
         };

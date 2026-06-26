@@ -31,6 +31,7 @@
         <ui:VisualElement>
             <ui:Toggle name="loop-toggle" label="Make Loop" />
             <ui:VisualElement name="loop-options" class="sub-options">
+                <ui:SliderInt name="pre-trim-ms-field" label="Pre-trim (ms)" low-value="0" high-value="500" show-input-field="true" />
                 <ui:SliderInt name="crossfade-pct-field" label="Crossfade (%)" low-value="0" high-value="100" show-input-field="true" />
             </ui:VisualElement>
         </ui:VisualElement>

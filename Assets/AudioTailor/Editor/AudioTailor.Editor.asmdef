@@ -1,7 +1,9 @@
 {
     "name": "AudioTailor.Editor",
     "rootNamespace": "AudioTailor.Editor",
-    "references": [],
+    "references": [
+        "Unity.Pipeline"
+    ],
     "includePlatforms": [
         "Editor"
     ],

@@ -11,13 +11,16 @@ namespace AudioTailor.Editor
 {
 
 [BurstCompile]
-struct WaveformMinMaxJob : IJobParallelFor
+struct WaveformMeshJob : IJobParallelFor
 {
     [ReadOnly] public NativeArray<float> Samples;
     public int FrameCount;
     public int Channels;
     public int PixelCount;
-    [WriteOnly] public NativeArray<float2> MinMax;
+    public float Height;
+    public Color32 WaveColor;
+    [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<Vertex> Vertices;
+    [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<ushort> Indices;
 
     public void Execute(int x)
     {
@@ -31,7 +34,23 @@ struct WaveformMinMaxJob : IJobParallelFor
             lo = math.min(lo, v);
             hi = math.max(hi, v);
         }
-        MinMax[x] = new float2(lo, hi);
+
+        var yTop = (0.5f - hi * 0.5f) * Height;
+        var yBot = math.max((0.5f - lo * 0.5f) * Height, yTop + 1f);
+
+        var vi = x * 4;
+        Vertices[vi + 0] = new Vertex { position = new Vector3(x,     yTop, Vertex.nearZ), tint = WaveColor };
+        Vertices[vi + 1] = new Vertex { position = new Vector3(x + 1, yTop, Vertex.nearZ), tint = WaveColor };
+        Vertices[vi + 2] = new Vertex { position = new Vector3(x + 1, yBot, Vertex.nearZ), tint = WaveColor };
+        Vertices[vi + 3] = new Vertex { position = new Vector3(x,     yBot, Vertex.nearZ), tint = WaveColor };
+
+        var ii = x * 6;
+        Indices[ii + 0] = (ushort)(vi + 0);
+        Indices[ii + 1] = (ushort)(vi + 1);
+        Indices[ii + 2] = (ushort)(vi + 2);
+        Indices[ii + 3] = (ushort)(vi + 2);
+        Indices[ii + 4] = (ushort)(vi + 3);
+        Indices[ii + 5] = (ushort)(vi + 0);
     }
 }
 
@@ -78,10 +97,14 @@ sealed class AudioTailorWindow : EditorWindow
 
     // Waveform cache
 
-    NativeArray<float> _displaySamples;  // owned copy for Painter2D draw
+    NativeArray<float> _displaySamples;
     object _waveformAudioKey;
     int _displayFrameCount;
     int _displayChannels;
+
+    NativeArray<Vertex> _waveformVertices;
+    NativeArray<ushort> _waveformIndices;
+    int _waveformPixelWidth;
 
 
     // Entry points
@@ -108,6 +131,8 @@ sealed class AudioTailorWindow : EditorWindow
         if (_previewClip != null) DestroyImmediate(_previewClip);
         if (_processedSamples.IsCreated) _processedSamples.Dispose();
         if (_displaySamples.IsCreated) _displaySamples.Dispose();
+        if (_waveformVertices.IsCreated) _waveformVertices.Dispose();
+        if (_waveformIndices.IsCreated) _waveformIndices.Dispose();
     }
 
     void CreateGUI()
@@ -250,31 +275,30 @@ sealed class AudioTailorWindow : EditorWindow
         var h = (int)rect.height;
         if (w < 1 || h < 1) return;
 
-        using var minMax = new NativeArray<float2>(w, Allocator.TempJob);
-        new WaveformMinMaxJob
+        if (_waveformPixelWidth != w)
+        {
+            if (_waveformVertices.IsCreated) _waveformVertices.Dispose();
+            if (_waveformIndices.IsCreated)  _waveformIndices.Dispose();
+            _waveformVertices   = new NativeArray<Vertex>(w * 4, Allocator.Persistent);
+            _waveformIndices    = new NativeArray<ushort>(w * 6, Allocator.Persistent);
+            _waveformPixelWidth = w;
+        }
+
+        new WaveformMeshJob
         {
             Samples    = _displaySamples,
             FrameCount = _displayFrameCount,
             Channels   = _displayChannels,
             PixelCount = w,
-            MinMax     = minMax,
+            Height     = h,
+            WaveColor  = (Color32)new Color(0.4f, 0.8f, 0.4f),
+            Vertices   = _waveformVertices,
+            Indices    = _waveformIndices,
         }.Schedule(w, 32).Complete();
 
-        var p = ctx.painter2D;
-        p.fillColor = new Color(0.4f, 0.8f, 0.4f);
-        p.BeginPath();
-        for (var x = 0; x < w; x++)
-        {
-            // Map signal [-1,1] to y [0,h] (UIElements: y increases downward)
-            var yTop = (0.5f - minMax[x].y * 0.5f) * h;
-            var yBot = math.max((0.5f - minMax[x].x * 0.5f) * h, yTop + 1);
-            p.MoveTo(new Vector2(x,     yTop));
-            p.LineTo(new Vector2(x + 1, yTop));
-            p.LineTo(new Vector2(x + 1, yBot));
-            p.LineTo(new Vector2(x,     yBot));
-            p.ClosePath();
-        }
-        p.Fill();
+        var mwd = ctx.Allocate(w * 4, w * 6, Texture2D.whiteTexture);
+        mwd.SetAllVertices(_waveformVertices);
+        mwd.SetAllIndices(_waveformIndices);
     }
 
     // Playhead

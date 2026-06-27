@@ -4,7 +4,7 @@
         <uie:ObjectField name="clip-field" label="Source Clip" />
 
         <ui:VisualElement name="waveform-container" class="waveform-container">
-            <ui:Image name="waveform-image" class="waveform-image" picking-mode="Ignore" />
+            <ui:VisualElement name="waveform-image" class="waveform-image" picking-mode="Ignore" />
             <ui:VisualElement name="playhead" class="playhead" />
         </ui:VisualElement>
 

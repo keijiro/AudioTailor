@@ -1,3 +1,4 @@
+using Unity.Collections;
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.UIElements;
@@ -48,7 +49,9 @@ sealed class AudioTailorWindow : EditorWindow
 
     // Waveform cache
 
-    Texture2D _waveformTexture;
+    RenderTexture _waveformRT;
+    GraphicsBuffer _waveformBuffer;
+    Material _waveformMaterial;
     object _waveformKey;
 
 
@@ -74,7 +77,8 @@ sealed class AudioTailorWindow : EditorWindow
     {
         StopPreview();
         if (_previewClip != null) DestroyImmediate(_previewClip);
-        if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
+        ReleaseWaveformResources();
+        if (_waveformMaterial != null) DestroyImmediate(_waveformMaterial);
     }
 
     void CreateGUI()
@@ -174,30 +178,32 @@ sealed class AudioTailorWindow : EditorWindow
         var w      = (int)width;
         var newKey = _processedSamples != null ? (object)_processedSamples : (object)_sourceClip;
 
-        if (w > 0 && height > 0 && _waveformTexture != null && _waveformKey == newKey &&
-            Mathf.Abs(_waveformTexture.width  - w)      <= 1 &&
-            Mathf.Abs(_waveformTexture.height - height) <= 1)
+        if (w > 0 && height > 0 && _waveformRT != null && _waveformKey == newKey &&
+            Mathf.Abs(_waveformRT.width  - w)      <= 1 &&
+            Mathf.Abs(_waveformRT.height - height) <= 1)
             return;
 
-        if (_waveformTexture != null) DestroyImmediate(_waveformTexture);
-        _waveformTexture = null;
-        _waveformKey     = newKey;
+        ReleaseWaveformResources();
+        _waveformKey = newKey;
 
         if (w > 0 && height > 0)
         {
             if (_processedSamples != null)
-                _waveformTexture = RenderWaveformFromSamples(
-                    _processedSamples, _processedChannels, w, height);
+                BuildAndRenderWaveform(_processedSamples, _processedChannels, w, height);
             else if (_sourceClip != null)
-                _waveformTexture = RenderWaveform(_sourceClip, w, height);
+            {
+                var raw = new float[_sourceClip.samples * _sourceClip.channels];
+                if (_sourceClip.GetData(raw, 0))
+                    BuildAndRenderWaveform(raw, _sourceClip.channels, w, height);
+            }
         }
 
-        _waveformImage.image = _waveformTexture;
+        _waveformImage.image = _waveformRT;
     }
 
     void InvalidateWaveform()
     {
-        if (_waveformTexture != null) { DestroyImmediate(_waveformTexture); _waveformTexture = null; }
+        ReleaseWaveformResources();
         _waveformKey = null;
         if (_waveformImage != null) _waveformImage.image = null;
         if (_waveformContainer != null)
@@ -205,6 +211,46 @@ sealed class AudioTailorWindow : EditorWindow
             var r = _waveformContainer.contentRect;
             UpdateWaveform(r.width, (int)r.height);
         }
+    }
+
+    void ReleaseWaveformResources()
+    {
+        if (_waveformRT != null) { _waveformRT.Release(); _waveformRT = null; }
+        if (_waveformBuffer != null) { _waveformBuffer.Dispose(); _waveformBuffer = null; }
+    }
+
+    void BuildAndRenderWaveform(float[] samples, int channels, int width, int height)
+    {
+        using var nativeSamples = new NativeArray<float>(samples, Allocator.TempJob);
+        using var minMax = WaveformBuilder.ComputeMinMax(nativeSamples, channels, width);
+
+        _waveformBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, width, sizeof(float) * 2);
+        _waveformBuffer.SetData(minMax);
+
+        _waveformRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
+            { hideFlags = HideFlags.HideAndDontSave };
+        _waveformRT.Create();
+
+        if (_waveformMaterial == null)
+        {
+            var shader = Shader.Find("Hidden/AudioTailor/Waveform");
+            _waveformMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+        }
+
+        _waveformMaterial.SetBuffer("_WaveformBuffer", _waveformBuffer);
+        _waveformMaterial.SetInt("_PixelCount", width);
+        _waveformMaterial.SetColor("_WaveColor", new Color(0.4f, 0.8f, 0.4f).linear);
+        _waveformMaterial.SetColor("_BackgroundColor", new Color(0.15f, 0.15f, 0.15f).linear);
+
+        // Defer Blit to outside of UIElements' rendering pass (avoids Metal command buffer conflict)
+        EditorApplication.delayCall += BlitWaveform;
+    }
+
+    void BlitWaveform()
+    {
+        if (_waveformMaterial == null || _waveformBuffer == null || _waveformRT == null) return;
+        Graphics.Blit(Texture2D.blackTexture, _waveformRT, _waveformMaterial);
+        Repaint();
     }
 
     // Playhead
@@ -333,47 +379,6 @@ sealed class AudioTailorWindow : EditorWindow
         UpdatePlayhead();
     }
 
-    // Waveform rendering
-
-    static Texture2D RenderWaveformFromSamples(float[] samples, int channels, int width, int height)
-    {
-        var bg     = new Color(0.15f, 0.15f, 0.15f);
-        var wave   = new Color(0.4f,  0.8f,  0.4f);
-        var frames = samples.Length / channels;
-        var pixels = new Color[width * height];
-        for (var i = 0; i < pixels.Length; i++) pixels[i] = bg;
-
-        for (var x = 0; x < width; x++)
-        {
-            var f0 = (int)((float)x       / width * frames);
-            var f1 = Mathf.Max(f0 + 1, (int)((float)(x + 1) / width * frames));
-
-            var lo = 0f; var hi = 0f;
-            for (var f = f0; f < f1; f++)
-            {
-                var v = samples[f * channels];
-                if (v < lo) lo = v;
-                if (v > hi) hi = v;
-            }
-
-            var yLo = Mathf.Clamp((int)((lo * 0.5f + 0.5f) * height), 0, height - 1);
-            var yHi = Mathf.Clamp((int)((hi * 0.5f + 0.5f) * height), 0, height - 1);
-            for (var y = yLo; y <= yHi; y++)
-                pixels[y * width + x] = wave;
-        }
-
-        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
-        tex.SetPixels(pixels);
-        tex.Apply();
-        return tex;
-    }
-
-    static Texture2D RenderWaveform(AudioClip clip, int width, int height)
-    {
-        var samples = new float[clip.samples * clip.channels];
-        if (!clip.GetData(samples, 0)) return null;
-        return RenderWaveformFromSamples(samples, clip.channels, width, height);
-    }
 }
 
 } // namespace AudioTailor.Editor

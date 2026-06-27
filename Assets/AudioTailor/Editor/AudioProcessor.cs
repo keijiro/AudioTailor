@@ -107,7 +107,7 @@ static class AudioProcessor
         var frameCount = samples.Length / channels;
 
         // Leading silence: first frame above silence threshold
-        var startFrame = 0;
+        var startFrame = frameCount;
         for (var f = 0; f < frameCount; f++)
         {
             if (FramePeak(samples, f, channels) > silenceAmp)
@@ -116,6 +116,7 @@ static class AudioProcessor
                 break;
             }
         }
+        if (startFrame >= frameCount) return Array.Empty<float>();
 
         // Fade start: last frame above release threshold
         var fadeStart = startFrame;

@@ -2,6 +2,9 @@
     "name": "AudioTailor.Editor",
     "rootNamespace": "AudioTailor.Editor",
     "references": [
+        "Unity.Burst",
+        "Unity.Collections",
+        "Unity.Mathematics",
         "Unity.Pipeline"
     ],
     "includePlatforms": [

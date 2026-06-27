@@ -26,8 +26,11 @@ Shader "Hidden/AudioTailor/Waveform"
                 float4 vertex : SV_POSITION;
             };
 
-            StructuredBuffer<float2> _WaveformBuffer;
-            int _PixelCount;
+            StructuredBuffer<float> _AudioBuffer;
+            int _FrameCount;
+            int _Channels;
+            int _PixelWidth;
+            int _PixelHeight;
             float4 _WaveColor;
             float4 _BackgroundColor;
 
@@ -41,23 +44,24 @@ Shader "Hidden/AudioTailor/Waveform"
 
             float4 frag(v2f i) : SV_Target
             {
-                // 3-sample horizontal multisample for antialiasing
-                const int sampleCount = 3;
-                float val = 0;
-                for (int s = 0; s < sampleCount; s++)
+                int x  = clamp((int)(i.uv.x * _PixelWidth), 0, _PixelWidth - 1);
+                int f0 = (int)((float)x       / _PixelWidth * _FrameCount);
+                int f1 = min(max(f0 + 1, (int)((float)(x + 1) / _PixelWidth * _FrameCount)), _FrameCount);
+
+                float lo =  1e10, hi = -1e10;
+                for (int f = f0; f < f1; f++)
                 {
-                    float uvx = i.uv.x + (s - 1) * (1.0 / _PixelCount) / sampleCount;
-                    int x = clamp((int)(uvx * _PixelCount), 0, _PixelCount - 1);
-                    float2 minMax = _WaveformBuffer[x];
-
-                    // Map UV y [0,1] → signal range [-1,1]
-                    float y = i.uv.y * 2.0 - 1.0;
-                    float d = abs(y - clamp(y, minMax.x, minMax.y));
-
-                    // Distance-based soft edge: 1 pixel fade
-                    val += (1.0 - saturate(d * _PixelCount)) / sampleCount;
+                    float v = _AudioBuffer[f * _Channels];
+                    lo = min(lo, v);
+                    hi = max(hi, v);
                 }
 
+                // Map UV y [0,1] → signal range [-1,1]
+                float y   = i.uv.y * 2.0 - 1.0;
+                float d   = abs(y - clamp(y, lo, hi));
+
+                // 1-pixel soft edge: scale by height (1 pixel = 2.0/_PixelHeight in signal space)
+                float val = 1.0 - saturate(d * _PixelHeight * 0.5);
                 return lerp(_BackgroundColor, _WaveColor, sqrt(val));
             }
             ENDCG

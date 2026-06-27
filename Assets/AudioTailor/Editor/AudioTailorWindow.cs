@@ -29,7 +29,8 @@ sealed class AudioTailorWindow : EditorWindow
     // Runtime state
 
     AudioClip _previewClip;
-    float[] _processedSamples;
+    NativeArray<float> _processedSamples;
+    object _processedToken;  // stable key for waveform cache comparison
     int _processedChannels;
     int _processedSampleRate;
 
@@ -52,7 +53,10 @@ sealed class AudioTailorWindow : EditorWindow
     RenderTexture _waveformRT;
     GraphicsBuffer _waveformBuffer;
     Material _waveformMaterial;
-    object _waveformKey;
+    object _waveformAudioKey;
+    int _waveformFrameCount;
+    int _waveformChannels;
+    bool _blitScheduled;
 
 
     // Entry points
@@ -77,6 +81,7 @@ sealed class AudioTailorWindow : EditorWindow
     {
         StopPreview();
         if (_previewClip != null) DestroyImmediate(_previewClip);
+        if (_processedSamples.IsCreated) _processedSamples.Dispose();
         ReleaseWaveformResources();
         if (_waveformMaterial != null) DestroyImmediate(_waveformMaterial);
     }
@@ -175,36 +180,65 @@ sealed class AudioTailorWindow : EditorWindow
 
     void UpdateWaveform(float width, int height)
     {
-        var w      = (int)width;
-        var newKey = _processedSamples != null ? (object)_processedSamples : (object)_sourceClip;
+        var w = (int)width;
+        if (w <= 0 || height <= 0) return;
 
-        if (w > 0 && height > 0 && _waveformRT != null && _waveformKey == newKey &&
-            Mathf.Abs(_waveformRT.width  - w)      <= 1 &&
-            Mathf.Abs(_waveformRT.height - height) <= 1)
-            return;
+        var newAudioKey  = _processedSamples.IsCreated ? _processedToken : (object)_sourceClip;
+        var audioChanged = _waveformAudioKey != newAudioKey;
+        var sizeChanged  = _waveformRT == null
+                        || Mathf.Abs(_waveformRT.width  - w)      > 1
+                        || Mathf.Abs(_waveformRT.height - height) > 1;
 
-        ReleaseWaveformResources();
-        _waveformKey = newKey;
+        if (!audioChanged && !sizeChanged) return;
 
-        if (w > 0 && height > 0)
+        if (audioChanged)
         {
-            if (_processedSamples != null)
-                BuildAndRenderWaveform(_processedSamples, _processedChannels, w, height);
+            if (_waveformBuffer != null) { _waveformBuffer.Dispose(); _waveformBuffer = null; }
+            _waveformAudioKey = newAudioKey;
+
+            if (_processedSamples.IsCreated)
+            {
+                _waveformBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured,
+                    _processedSamples.Length, sizeof(float));
+                _waveformBuffer.SetData(_processedSamples);
+                _waveformFrameCount = _processedSamples.Length / _processedChannels;
+                _waveformChannels   = _processedChannels;
+            }
             else if (_sourceClip != null)
             {
-                var raw = new float[_sourceClip.samples * _sourceClip.channels];
-                if (_sourceClip.GetData(raw, 0))
-                    BuildAndRenderWaveform(raw, _sourceClip.channels, w, height);
+                var count = _sourceClip.samples * _sourceClip.channels;
+                using var tmp = new NativeArray<float>(count, Allocator.Temp);
+                if (_sourceClip.GetData(tmp.AsSpan(), 0))
+                {
+                    _waveformBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured,
+                        count, sizeof(float));
+                    _waveformBuffer.SetData(tmp);
+                    _waveformFrameCount = _sourceClip.samples;
+                    _waveformChannels   = _sourceClip.channels;
+                }
+            }
+        }
+
+        if (sizeChanged)
+        {
+            if (_waveformRT != null) { _waveformRT.Release(); _waveformRT = null; }
+            if (_waveformBuffer != null)
+            {
+                _waveformRT = new RenderTexture(w, height, 0, RenderTextureFormat.ARGB32)
+                    { hideFlags = HideFlags.HideAndDontSave };
+                _waveformRT.Create();
             }
         }
 
         _waveformImage.image = _waveformRT;
+
+        if (_waveformBuffer != null && _waveformRT != null)
+            ScheduleBlit();
     }
 
     void InvalidateWaveform()
     {
-        ReleaseWaveformResources();
-        _waveformKey = null;
+        _waveformAudioKey = null;
         if (_waveformImage != null) _waveformImage.image = null;
         if (_waveformContainer != null)
         {
@@ -215,21 +249,21 @@ sealed class AudioTailorWindow : EditorWindow
 
     void ReleaseWaveformResources()
     {
-        if (_waveformRT != null) { _waveformRT.Release(); _waveformRT = null; }
+        if (_waveformRT     != null) { _waveformRT.Release(); _waveformRT = null; }
         if (_waveformBuffer != null) { _waveformBuffer.Dispose(); _waveformBuffer = null; }
     }
 
-    void BuildAndRenderWaveform(float[] samples, int channels, int width, int height)
+    void ScheduleBlit()
     {
-        using var nativeSamples = new NativeArray<float>(samples, Allocator.TempJob);
-        using var minMax = WaveformBuilder.ComputeMinMax(nativeSamples, channels, width);
+        if (_blitScheduled) return;
+        _blitScheduled = true;
+        EditorApplication.delayCall += BlitWaveform;
+    }
 
-        _waveformBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, width, sizeof(float) * 2);
-        _waveformBuffer.SetData(minMax);
-
-        _waveformRT = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
-            { hideFlags = HideFlags.HideAndDontSave };
-        _waveformRT.Create();
+    void BlitWaveform()
+    {
+        _blitScheduled = false;
+        if (_waveformBuffer == null || _waveformRT == null) return;
 
         if (_waveformMaterial == null)
         {
@@ -237,18 +271,15 @@ sealed class AudioTailorWindow : EditorWindow
             _waveformMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
         }
 
-        _waveformMaterial.SetBuffer("_WaveformBuffer", _waveformBuffer);
-        _waveformMaterial.SetInt("_PixelCount", width);
-        _waveformMaterial.SetColor("_WaveColor", new Color(0.4f, 0.8f, 0.4f).linear);
-        _waveformMaterial.SetColor("_BackgroundColor", new Color(0.15f, 0.15f, 0.15f).linear);
+        _waveformMaterial.SetBuffer("_AudioBuffer",      _waveformBuffer);
+        _waveformMaterial.SetInt   ("_FrameCount",       _waveformFrameCount);
+        _waveformMaterial.SetInt   ("_Channels",         _waveformChannels);
+        _waveformMaterial.SetInt   ("_PixelWidth",       _waveformRT.width);
+        _waveformMaterial.SetInt   ("_PixelHeight",      _waveformRT.height);
+        _waveformMaterial.SetColor ("_WaveColor",        new Color(0.4f, 0.8f, 0.4f).linear);
+        _waveformMaterial.SetColor ("_BackgroundColor",  new Color(0.15f, 0.15f, 0.15f).linear);
 
-        // Defer Blit to outside of UIElements' rendering pass (avoids Metal command buffer conflict)
-        EditorApplication.delayCall += BlitWaveform;
-    }
-
-    void BlitWaveform()
-    {
-        if (_waveformMaterial == null || _waveformBuffer == null || _waveformRT == null) return;
+        // Defer to outside of UIElements' rendering pass (avoids Metal command buffer conflict)
         Graphics.Blit(Texture2D.blackTexture, _waveformRT, _waveformMaterial);
         Repaint();
     }
@@ -288,18 +319,21 @@ sealed class AudioTailorWindow : EditorWindow
             convertMono        = _convertMono,
         };
 
+        if (_processedSamples.IsCreated) { _processedSamples.Dispose(); _processedSamples = default; }
+        _processedToken = null;
+
         var (samples, channels, sampleRate) = AudioProcessor.ProcessToSamples(_sourceClip, opts);
-        if (samples == null) return;
+        if (!samples.IsCreated) return;
 
         _processedSamples    = samples;
+        _processedToken      = new object();
         _processedChannels   = channels;
         _processedSampleRate = sampleRate;
 
         if (_previewClip != null) DestroyImmediate(_previewClip);
-        _previewClip = AudioClip.Create("Preview",
-            _processedSamples.Length / _processedChannels,
-            _processedChannels, _processedSampleRate, false);
-        _previewClip.SetData(_processedSamples, 0);
+        var frameCount = _processedSamples.Length / _processedChannels;
+        _previewClip = AudioClip.Create("Preview", frameCount, _processedChannels, _processedSampleRate, false);
+        _previewClip.SetData(_processedSamples.AsReadOnlySpan(), 0);
 
         if (_saveBtn != null) _saveBtn.SetEnabled(true);
         InvalidateWaveform();
@@ -307,7 +341,7 @@ sealed class AudioTailorWindow : EditorWindow
 
     void RunSave()
     {
-        if (_processedSamples == null) return;
+        if (!_processedSamples.IsCreated) return;
 
         var path = AssetDatabase.GetAssetPath(_sourceClip);
         if (string.IsNullOrEmpty(path))
@@ -326,7 +360,8 @@ sealed class AudioTailorWindow : EditorWindow
     {
         StopPreview();
         if (_previewClip != null) { DestroyImmediate(_previewClip); _previewClip = null; }
-        _processedSamples    = null;
+        if (_processedSamples.IsCreated) { _processedSamples.Dispose(); _processedSamples = default; }
+        _processedToken      = null;
         _processedChannels   = 0;
         _processedSampleRate = 0;
 

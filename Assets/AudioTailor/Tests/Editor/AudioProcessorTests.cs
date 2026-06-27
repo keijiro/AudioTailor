@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Unity.Collections;
 using UnityEngine;
 
 namespace AudioTailor.Editor.Tests
@@ -36,9 +37,10 @@ class AudioProcessorTests
         var (result, _, _) = AudioProcessor.ProcessToSamples(clip, opts);
         Destroy(clip);
 
-        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsCreated);
         Assert.Less(result.Length, 300, "Trimmed result should be shorter than the original");
         Assert.Greater(result.Length, 0, "Trimmed result should not be empty");
+        result.Dispose();
     }
 
     [Test]
@@ -56,8 +58,9 @@ class AudioProcessorTests
         var (result, _, _) = AudioProcessor.ProcessToSamples(clip, opts);
         Destroy(clip);
 
-        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsCreated);
         Assert.AreEqual(0, result.Length, "All-silent clip should trim to empty");
+        result.Dispose();
     }
 
     // --- Normalize ---
@@ -74,12 +77,13 @@ class AudioProcessorTests
         var (result, _, _) = AudioProcessor.ProcessToSamples(clip, opts);
         Destroy(clip);
 
-        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsCreated);
         var peak = 0f;
         foreach (var s in result) if (Mathf.Abs(s) > peak) peak = Mathf.Abs(s);
 
         var expectedPeak = Mathf.Pow(10f, targetDb / 20f);
         Assert.AreEqual(expectedPeak, peak, 0.001f, "Peak should match target level");
+        result.Dispose();
     }
 
     [Test]
@@ -92,7 +96,8 @@ class AudioProcessorTests
         var (result, _, _) = AudioProcessor.ProcessToSamples(clip, opts);
         Destroy(clip);
 
-        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsCreated);
+        result.Dispose();
     }
 
     // --- MakeLoop ---
@@ -113,8 +118,9 @@ class AudioProcessorTests
         var (result, _, _) = AudioProcessor.ProcessToSamples(clip, opts);
         Destroy(clip);
 
-        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsCreated);
         Assert.Less(result.Length, 4000, "Loop crossfade should reduce sample count");
+        result.Dispose();
     }
 
     // --- ConvertMono ---
@@ -131,9 +137,10 @@ class AudioProcessorTests
         var (result, channels, _) = AudioProcessor.ProcessToSamples(clip, opts);
         Destroy(clip);
 
-        Assert.IsNotNull(result);
+        Assert.IsTrue(result.IsCreated);
         Assert.AreEqual(1, channels, "Output should be mono");
         Assert.AreEqual(1000, result.Length, "Mono frame count should be half of stereo samples");
+        result.Dispose();
     }
 }
 

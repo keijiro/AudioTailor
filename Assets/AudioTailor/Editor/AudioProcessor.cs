@@ -1,6 +1,10 @@
 using System;
 using System.IO;
 using System.Text;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine;
 using UnityEditor;
 
@@ -23,49 +27,97 @@ struct ProcessingOptions
     public bool convertMono;
 }
 
+[BurstCompile]
+struct ToMonoJob : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float> Input;
+    public int Channels;
+    [WriteOnly] public NativeArray<float> Output;
+
+    public void Execute(int frame)
+    {
+        var sum = 0f;
+        for (var c = 0; c < Channels; c++) sum += Input[frame * Channels + c];
+        Output[frame] = sum / Channels;
+    }
+}
+
+[BurstCompile]
+struct NormalizePeakJob : IJob
+{
+    [ReadOnly] public NativeArray<float> Samples;
+    [WriteOnly] public NativeArray<float> Peak;
+
+    public void Execute()
+    {
+        var peak = 0f;
+        for (var i = 0; i < Samples.Length; i++)
+            peak = math.max(peak, math.abs(Samples[i]));
+        Peak[0] = peak;
+    }
+}
+
+[BurstCompile]
+struct NormalizeScaleJob : IJobParallelFor
+{
+    public NativeArray<float> Samples;
+    public float Scale;
+
+    public void Execute(int i) => Samples[i] *= Scale;
+}
+
 static class AudioProcessor
 {
     // Public interface
 
-    public static (float[] samples, int channels, int sampleRate)
+    public static (NativeArray<float> samples, int channels, int sampleRate)
         ProcessToSamples(AudioClip clip, ProcessingOptions opts)
     {
         var channels   = clip.channels;
         var sampleRate = clip.frequency;
         var frameCount = clip.samples;
 
-        var raw = new float[frameCount * channels];
-        if (!clip.GetData(raw, 0))
+        var samples = LoadFromClip(clip);
+        if (!samples.IsCreated)
         {
             EditorUtility.DisplayDialog("Audio Tailor",
                 "Failed to read audio data. The clip may be compressed or streaming.",
                 "OK");
-            return (null, 0, 0);
+            return (default, 0, 0);
         }
 
-        float[] samples;
         int outChannels;
 
-        if (opts.convertMono || channels == 1)
+        if (opts.convertMono && channels > 1)
         {
-            samples     = ToMono(raw, channels, frameCount);
+            var mono = ToMono(samples, channels, frameCount);
+            samples.Dispose();
+            samples     = mono;
             outChannels = 1;
         }
         else
         {
-            samples     = raw;
             outChannels = channels;
         }
 
         if (opts.trimSilence)
-            samples = TrimSilence(samples, outChannels, sampleRate,
+        {
+            var trimmed = TrimSilence(samples, outChannels, sampleRate,
                 opts.silenceThresholdDb, opts.releaseThresholdDb);
+            samples.Dispose();
+            samples = trimmed;
+        }
 
         if (opts.normalize)
-            samples = Normalize(samples, opts.targetLevelDb);
+            Normalize(samples, opts.targetLevelDb);
 
         if (opts.makeLoop)
-            samples = MakeLoop(samples, outChannels, sampleRate, opts.preTrimMs, opts.crossfadeDuration);
+        {
+            var looped = MakeLoop(samples, outChannels, sampleRate,
+                opts.preTrimMs, opts.crossfadeDuration);
+            samples.Dispose();
+            samples = looped;
+        }
 
         return (samples, outChannels, sampleRate);
     }
@@ -73,33 +125,38 @@ static class AudioProcessor
     public static void Process(AudioClip clip, ProcessingOptions opts, string outputPath)
     {
         var (samples, channels, sampleRate) = ProcessToSamples(clip, opts);
-        if (samples != null)
+        if (samples.IsCreated)
+        {
             WriteWav(outputPath, samples, channels, sampleRate);
+            samples.Dispose();
+        }
     }
 
-    internal static void SaveToFile(string assetPath, float[] samples, int channels, int sampleRate)
+    internal static void SaveToFile(string assetPath, NativeArray<float> samples, int channels, int sampleRate)
         => WriteWav(assetPath, samples, channels, sampleRate);
 
     // Private processing steps
 
-    static float[] ToMono(float[] interleaved, int channels, int frameCount)
+    static NativeArray<float> LoadFromClip(AudioClip clip)
     {
-        if (channels == 1) return interleaved;
-        var mono = new float[frameCount];
-        for (var f = 0; f < frameCount; f++)
-        {
-            var sum = 0f;
-            for (var c = 0; c < channels; c++)
-                sum += interleaved[f * channels + c];
-            mono[f] = sum / channels;
-        }
-        return mono;
+        var samples = new NativeArray<float>(clip.samples * clip.channels, Allocator.Persistent);
+        if (clip.GetData(samples.AsSpan(), 0)) return samples;
+        samples.Dispose();
+        return default;
+    }
+
+    static NativeArray<float> ToMono(NativeArray<float> interleaved, int channels, int frameCount)
+    {
+        var output = new NativeArray<float>(frameCount, Allocator.Persistent);
+        new ToMonoJob { Input = interleaved, Channels = channels, Output = output }
+            .Schedule(frameCount, 64).Complete();
+        return output;
     }
 
     // 10 ms — short enough to be inaudible, long enough to avoid clicks
     const float FadeDurationSec = 0.01f;
 
-    static float[] TrimSilence(float[] samples, int channels, int sampleRate,
+    static NativeArray<float> TrimSilence(NativeArray<float> samples, int channels, int sampleRate,
         float silenceThresholdDb, float releaseThresholdDb)
     {
         var silenceAmp = DbToAmplitude(silenceThresholdDb);
@@ -116,7 +173,7 @@ static class AudioProcessor
                 break;
             }
         }
-        if (startFrame >= frameCount) return Array.Empty<float>();
+        if (startFrame >= frameCount) return new NativeArray<float>(0, Allocator.Persistent);
 
         // Fade start: last frame above release threshold
         var fadeStart = startFrame;
@@ -140,68 +197,61 @@ static class AudioProcessor
         }
 
         var outFrames = absEnd - startFrame;
-        var result = new float[outFrames * channels];
-        Array.Copy(samples, startFrame * channels, result, 0, outFrames * channels);
+        var result = new NativeArray<float>(outFrames * channels, Allocator.Persistent);
+        NativeArray<float>.Copy(samples, startFrame * channels, result, 0, outFrames * channels);
         return result;
     }
 
-    static float[] Normalize(float[] samples, float targetLevelDb)
+    static void Normalize(NativeArray<float> samples, float targetLevelDb)
     {
-        var peak = 0f;
-        foreach (var s in samples)
-            peak = MathF.Max(peak, MathF.Abs(s));
+        using var peakArr = new NativeArray<float>(1, Allocator.TempJob);
+        new NormalizePeakJob { Samples = samples, Peak = peakArr }.Schedule().Complete();
 
-        if (peak < 1e-6f) return samples;
+        var peak = peakArr[0];
+        if (peak < 1e-6f) return;
 
         var scale = DbToAmplitude(targetLevelDb) / peak;
-        for (var i = 0; i < samples.Length; i++)
-            samples[i] *= scale;
-        return samples;
+        new NormalizeScaleJob { Samples = samples, Scale = scale }
+            .Schedule(samples.Length, 64).Complete();
     }
 
-    static float[] MakeLoop(float[] samples, int channels, int sampleRate, int preTrimMs, float crossfadeDuration)
+    static NativeArray<float> MakeLoop(NativeArray<float> samples, int channels, int sampleRate,
+        int preTrimMs, float crossfadeDuration)
     {
-        var frameCount = samples.Length / channels;
-
-        // Trim start and end before crossfading
+        var frameCount    = samples.Length / channels;
         var preTrimFrames = Math.Min((int)(preTrimMs / 1000f * sampleRate), frameCount / 4);
-        if (preTrimFrames > 0)
-        {
-            var trimmedFrames = frameCount - 2 * preTrimFrames;
-            var trimmed = new float[trimmedFrames * channels];
-            Array.Copy(samples, preTrimFrames * channels, trimmed, 0, trimmedFrames * channels);
-            samples    = trimmed;
-            frameCount = trimmedFrames;
-        }
 
-        var crossFrames = Math.Min((int)(crossfadeDuration * sampleRate), frameCount / 2);
-        if (crossFrames <= 0) return samples;
+        var workStart  = preTrimFrames;
+        var workFrames = frameCount - 2 * preTrimFrames;
 
-        // Blend tail into head over the crossfade region (equal power)
+        var crossFrames = Math.Min((int)(crossfadeDuration * sampleRate), workFrames / 2);
+        var outFrames   = crossFrames > 0 ? workFrames - crossFrames : workFrames;
+
+        // Copy the working region (minus tail) into result
+        var result = new NativeArray<float>(outFrames * channels, Allocator.Persistent);
+        NativeArray<float>.Copy(samples, workStart * channels, result, 0, outFrames * channels);
+
+        // Overwrite head with crossfade blend (equal power)
         for (var f = 0; f < crossFrames; f++)
         {
             var t         = (float)f / crossFrames * (MathF.PI / 2f);
             var gainHead  = MathF.Sin(t);
             var gainTail  = MathF.Cos(t);
-            var tailFrame = frameCount - crossFrames + f;
+            var tailFrame = workFrames - crossFrames + f;
             for (var c = 0; c < channels; c++)
             {
-                var head = samples[f         * channels + c];
-                var tail = samples[tailFrame * channels + c];
-                samples[f * channels + c] = head * gainHead + tail * gainTail;
+                var head = samples[(workStart + f)         * channels + c];
+                var tail = samples[(workStart + tailFrame) * channels + c];
+                result[f * channels + c] = head * gainHead + tail * gainTail;
             }
         }
 
-        // Drop the tail that was folded in
-        var outFrames = frameCount - crossFrames;
-        var result    = new float[outFrames * channels];
-        Array.Copy(samples, 0, result, 0, outFrames * channels);
         return result;
     }
 
     // WAV output
 
-    static void WriteWav(string assetPath, float[] samples, int channels, int sampleRate)
+    static void WriteWav(string assetPath, NativeArray<float> samples, int channels, int sampleRate)
     {
         var fullPath = Path.GetFullPath(
             Path.Combine(Application.dataPath, "..", assetPath));
@@ -231,15 +281,15 @@ static class AudioProcessor
         // data chunk
         writer.Write(Encoding.ASCII.GetBytes("data"));
         writer.Write(dataSize);
-        foreach (var s in samples)
-            writer.Write((short)(Mathf.Clamp(s, -1f, 1f) * short.MaxValue));
+        for (var i = 0; i < samples.Length; i++)
+            writer.Write((short)(Mathf.Clamp(samples[i], -1f, 1f) * short.MaxValue));
     }
 
     // Utilities
 
     static float DbToAmplitude(float db) => Mathf.Pow(10f, db / 20f);
 
-    static float FramePeak(float[] samples, int frame, int channels)
+    static float FramePeak(NativeArray<float> samples, int frame, int channels)
     {
         var peak = 0f;
         for (var c = 0; c < channels; c++)

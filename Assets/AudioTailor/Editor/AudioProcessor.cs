@@ -43,27 +43,86 @@ struct ToMonoJob : IJobParallelFor
 }
 
 [BurstCompile]
-struct NormalizePeakJob : IJob
-{
-    [ReadOnly] public NativeArray<float> Samples;
-    [WriteOnly] public NativeArray<float> Peak;
-
-    public void Execute()
-    {
-        var peak = 0f;
-        for (var i = 0; i < Samples.Length; i++)
-            peak = math.max(peak, math.abs(Samples[i]));
-        Peak[0] = peak;
-    }
-}
-
-[BurstCompile]
 struct NormalizeScaleJob : IJobParallelFor
 {
     public NativeArray<float> Samples;
     public float Scale;
 
     public void Execute(int i) => Samples[i] *= Scale;
+}
+
+[BurstCompile]
+struct CrossfadeJob : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float> Source;
+    public NativeArray<float> Result;
+    public int Channels;
+    public int CrossFrames;
+    public int WorkFrames;
+    public int WorkStart;
+
+    public void Execute(int f)
+    {
+        var t         = (float)f / CrossFrames * (math.PI / 2f);
+        var gainHead  = math.sin(t);
+        var gainTail  = math.cos(t);
+        var tailFrame = WorkFrames - CrossFrames + f;
+        for (var c = 0; c < Channels; c++)
+        {
+            var head = Source[(WorkStart + f)         * Channels + c];
+            var tail = Source[(WorkStart + tailFrame) * Channels + c];
+            Result[f * Channels + c] = head * gainHead + tail * gainTail;
+        }
+    }
+}
+
+[BurstCompile]
+static class AudioBurstMethods
+{
+    [BurstCompile]
+    internal static void FindPeak(ref NativeArray<float> samples, out float peak)
+    {
+        peak = 0f;
+        for (var i = 0; i < samples.Length; i++)
+            peak = math.max(peak, math.abs(samples[i]));
+    }
+
+    [BurstCompile]
+    internal static void ScanTrimPoints(ref NativeArray<float> samples, int frameCount, int channels,
+        float silenceAmp, float releaseAmp, out int startFrame, out int fadeStart)
+    {
+        startFrame = frameCount;
+        for (var f = 0; f < frameCount; f++)
+        {
+            if (FramePeak(samples, f, channels) > silenceAmp) { startFrame = f; break; }
+        }
+        fadeStart = startFrame;
+        if (startFrame >= frameCount) return;
+        for (var f = frameCount - 1; f >= startFrame; f--)
+        {
+            if (FramePeak(samples, f, channels) > releaseAmp) { fadeStart = f + 1; break; }
+        }
+    }
+
+    [BurstCompile]
+    internal static void ApplyLinearFadeOut(ref NativeArray<float> samples, int fadeStart, int fadeLen, int channels)
+    {
+        var absEnd = fadeStart + fadeLen;
+        for (var f = fadeStart; f < absEnd; f++)
+        {
+            var t = 1f - (float)(f - fadeStart) / fadeLen;
+            for (var c = 0; c < channels; c++)
+                samples[f * channels + c] *= t;
+        }
+    }
+
+    static float FramePeak(NativeArray<float> samples, int frame, int channels)
+    {
+        var peak = 0f;
+        for (var c = 0; c < channels; c++)
+            peak = math.max(peak, math.abs(samples[frame * channels + c]));
+        return peak;
+    }
 }
 
 static class AudioProcessor
@@ -163,38 +222,15 @@ static class AudioProcessor
         var releaseAmp = DbToAmplitude(releaseThresholdDb);
         var frameCount = samples.Length / channels;
 
-        // Leading silence: first frame above silence threshold
-        var startFrame = frameCount;
-        for (var f = 0; f < frameCount; f++)
-        {
-            if (FramePeak(samples, f, channels) > silenceAmp)
-            {
-                startFrame = f;
-                break;
-            }
-        }
-        if (startFrame >= frameCount) return new NativeArray<float>(0, Allocator.Persistent);
+        AudioBurstMethods.ScanTrimPoints(ref samples, frameCount, channels,
+            silenceAmp, releaseAmp, out var startFrame, out var fadeStart);
 
-        // Fade start: last frame above release threshold
-        var fadeStart = startFrame;
-        for (var f = frameCount - 1; f >= startFrame; f--)
-        {
-            if (FramePeak(samples, f, channels) > releaseAmp)
-            {
-                fadeStart = f + 1;
-                break;
-            }
-        }
+        if (startFrame >= frameCount) return new NativeArray<float>(0, Allocator.Persistent);
 
         // Apply a short linear fade-out to avoid a click at the cut point
         var fadeLen = Math.Min((int)(FadeDurationSec * sampleRate), frameCount - fadeStart);
         var absEnd  = fadeStart + fadeLen;
-        for (var f = fadeStart; f < absEnd; f++)
-        {
-            var t = 1f - (float)(f - fadeStart) / fadeLen;
-            for (var c = 0; c < channels; c++)
-                samples[f * channels + c] *= t;
-        }
+        AudioBurstMethods.ApplyLinearFadeOut(ref samples, fadeStart, fadeLen, channels);
 
         var outFrames = absEnd - startFrame;
         var result = new NativeArray<float>(outFrames * channels, Allocator.Persistent);
@@ -204,10 +240,7 @@ static class AudioProcessor
 
     static void Normalize(NativeArray<float> samples, float targetLevelDb)
     {
-        using var peakArr = new NativeArray<float>(1, Allocator.TempJob);
-        new NormalizePeakJob { Samples = samples, Peak = peakArr }.Schedule().Complete();
-
-        var peak = peakArr[0];
+        AudioBurstMethods.FindPeak(ref samples, out var peak);
         if (peak < 1e-6f) return;
 
         var scale = DbToAmplitude(targetLevelDb) / peak;
@@ -231,19 +264,18 @@ static class AudioProcessor
         var result = new NativeArray<float>(outFrames * channels, Allocator.Persistent);
         NativeArray<float>.Copy(samples, workStart * channels, result, 0, outFrames * channels);
 
-        // Overwrite head with crossfade blend (equal power)
-        for (var f = 0; f < crossFrames; f++)
+        // Overwrite head with crossfade blend (equal power) via Burst job
+        if (crossFrames > 0)
         {
-            var t         = (float)f / crossFrames * (MathF.PI / 2f);
-            var gainHead  = MathF.Sin(t);
-            var gainTail  = MathF.Cos(t);
-            var tailFrame = workFrames - crossFrames + f;
-            for (var c = 0; c < channels; c++)
+            new CrossfadeJob
             {
-                var head = samples[(workStart + f)         * channels + c];
-                var tail = samples[(workStart + tailFrame) * channels + c];
-                result[f * channels + c] = head * gainHead + tail * gainTail;
-            }
+                Source      = samples,
+                Result      = result,
+                Channels    = channels,
+                CrossFrames = crossFrames,
+                WorkFrames  = workFrames,
+                WorkStart   = workStart,
+            }.Schedule(crossFrames, 32).Complete();
         }
 
         return result;
@@ -288,14 +320,6 @@ static class AudioProcessor
     // Utilities
 
     static float DbToAmplitude(float db) => Mathf.Pow(10f, db / 20f);
-
-    static float FramePeak(NativeArray<float> samples, int frame, int channels)
-    {
-        var peak = 0f;
-        for (var c = 0; c < channels; c++)
-            peak = MathF.Max(peak, MathF.Abs(samples[frame * channels + c]));
-        return peak;
-    }
 }
 
 } // namespace AudioTailor.Editor

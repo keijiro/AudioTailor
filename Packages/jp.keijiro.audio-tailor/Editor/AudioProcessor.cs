@@ -55,7 +55,7 @@ struct NormalizeScaleJob : IJobParallelFor
 struct CrossfadeJob : IJobParallelFor
 {
     [ReadOnly] public NativeArray<float> Source;
-    public NativeArray<float> Result;
+    [NativeDisableParallelForRestriction] public NativeArray<float> Result;
     public int Channels;
     public int CrossFrames;
     public int WorkFrames;

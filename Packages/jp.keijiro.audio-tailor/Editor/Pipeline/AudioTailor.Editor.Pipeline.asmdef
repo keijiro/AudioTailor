@@ -1,0 +1,27 @@
+{
+    "name": "AudioTailor.Editor.Pipeline",
+    "rootNamespace": "AudioTailor.Editor",
+    "references": [
+        "AudioTailor.Editor",
+        "Unity.Pipeline"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "AUDIO_TAILOR_HAS_PIPELINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.pipeline",
+            "expression": "",
+            "define": "AUDIO_TAILOR_HAS_PIPELINE"
+        }
+    ],
+    "noEngineReferences": false
+}

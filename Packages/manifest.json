@@ -9,6 +9,9 @@
     "com.unity.modules.uielements": "1.0.0",
     "com.unity.pipeline": "0.2.0-exp.2"
   },
+  "testables": [
+    "jp.keijiro.audio-tailor"
+  ],
   "scopedRegistries": [
     {
       "name": "Keijiro",

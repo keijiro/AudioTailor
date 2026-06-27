@@ -4,8 +4,7 @@
     "references": [
         "Unity.Burst",
         "Unity.Collections",
-        "Unity.Mathematics",
-        "Unity.Pipeline"
+        "Unity.Mathematics"
     ],
     "includePlatforms": [
         "Editor"
@@ -16,6 +15,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.pipeline",
+            "expression": "",
+            "define": "AUDIO_TAILOR_HAS_PIPELINE"
+        }
+    ],
     "noEngineReferences": false
 }

@@ -138,7 +138,7 @@ sealed class AudioTailorWindow : EditorWindow
     void CreateGUI()
     {
         var uxml = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
-            "Assets/AudioTailor/Editor/AudioTailorWindow.uxml");
+            "Packages/jp.keijiro.audio-tailor/Editor/AudioTailorWindow.uxml");
         uxml.CloneTree(rootVisualElement);
 
         var root = rootVisualElement;

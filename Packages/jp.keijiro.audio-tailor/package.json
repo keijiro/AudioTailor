@@ -1,6 +1,6 @@
 {
   "name": "jp.keijiro.audio-tailor",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "displayName": "Audio Tailor",
   "description": "Audio clip processing editor tool for trimming silence, normalizing, and loop creation.",
   "unity": "6000.0",
@@ -12,6 +12,9 @@
   "repository": {
     "type": "git",
     "url": "git@github.com:keijiro/AudioTailor.git"
+  },
+  "_upm": {
+    "changelog": "Initial release."
   },
   "dependencies": {
     "com.unity.burst": "1.8.29",

@@ -1,6 +1,6 @@
 {
   "name": "jp.keijiro.audio-tailor",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "displayName": "Audio Tailor",
   "description": "Audio clip processing editor tool for trimming silence, normalizing, and loop creation.",
   "unity": "6000.0",
@@ -14,7 +14,7 @@
     "url": "git@github.com:keijiro/AudioTailor.git"
   },
   "_upm": {
-    "changelog": "Initial release."
+    "changelog": "<b>Added</b><br>- Stereo waveform display: up to two channels are shown as separate waveforms."
   },
   "dependencies": {
     "com.unity.burst": "1.8.29",

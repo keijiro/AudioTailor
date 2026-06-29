@@ -16,8 +16,11 @@ struct WaveformMeshJob : IJobParallelFor
     [ReadOnly] public NativeArray<float> Samples;
     public int FrameCount;
     public int Channels;
+    public int ChannelIndex;
     public int PixelCount;
+    public float YOffset;
     public float Height;
+    public int VertexBase;
     public Color32 WaveColor;
     [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<Vertex> Vertices;
     [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<ushort> Indices;
@@ -30,15 +33,15 @@ struct WaveformMeshJob : IJobParallelFor
         var hi = -1e10f;
         for (var f = f0; f < f1; f++)
         {
-            var v = Samples[f * Channels];
+            var v = Samples[f * Channels + ChannelIndex];
             lo = math.min(lo, v);
             hi = math.max(hi, v);
         }
 
-        var yTop = (0.5f - hi * 0.5f) * Height;
-        var yBot = math.max((0.5f - lo * 0.5f) * Height, yTop + 1f);
+        var yTop = YOffset + (0.5f - hi * 0.5f) * Height;
+        var yBot = math.max(YOffset + (0.5f - lo * 0.5f) * Height, yTop + 1f);
 
-        var vi = x * 4;
+        var vi = VertexBase + x * 4;
         Vertices[vi + 0] = new Vertex { position = new Vector3(x,     yTop, Vertex.nearZ), tint = WaveColor };
         Vertices[vi + 1] = new Vertex { position = new Vector3(x + 1, yTop, Vertex.nearZ), tint = WaveColor };
         Vertices[vi + 2] = new Vertex { position = new Vector3(x + 1, yBot, Vertex.nearZ), tint = WaveColor };
@@ -105,6 +108,7 @@ sealed class AudioTailorWindow : EditorWindow
     NativeArray<Vertex> _waveformVertices;
     NativeArray<ushort> _waveformIndices;
     int _waveformPixelWidth;
+    int _waveformChannelCount;
 
 
     // Entry points
@@ -275,28 +279,43 @@ sealed class AudioTailorWindow : EditorWindow
         var h = (int)rect.height;
         if (w < 1 || h < 1) return;
 
-        if (_waveformPixelWidth != w)
+        var displayCount = math.min(_displayChannels, 2);
+
+        if (_waveformPixelWidth != w || _waveformChannelCount != displayCount)
         {
             if (_waveformVertices.IsCreated) _waveformVertices.Dispose();
             if (_waveformIndices.IsCreated)  _waveformIndices.Dispose();
-            _waveformVertices   = new NativeArray<Vertex>(w * 4, Allocator.Persistent);
-            _waveformIndices    = new NativeArray<ushort>(w * 6, Allocator.Persistent);
-            _waveformPixelWidth = w;
+            _waveformVertices     = new NativeArray<Vertex>(w * 4 * displayCount, Allocator.Persistent);
+            _waveformIndices      = new NativeArray<ushort>(w * 6 * displayCount, Allocator.Persistent);
+            _waveformPixelWidth   = w;
+            _waveformChannelCount = displayCount;
         }
 
-        new WaveformMeshJob
-        {
-            Samples    = _displaySamples,
-            FrameCount = _displayFrameCount,
-            Channels   = _displayChannels,
-            PixelCount = w,
-            Height     = h,
-            WaveColor  = (Color32)new Color(0.4f, 0.8f, 0.4f),
-            Vertices   = _waveformVertices,
-            Indices    = _waveformIndices,
-        }.Schedule(w, 32).Complete();
+        var channelH  = h / (float)displayCount;
+        var waveColor = (Color32)new Color(0.4f, 0.8f, 0.4f);
+        var handle    = new JobHandle();
 
-        var mwd = ctx.Allocate(w * 4, w * 6, Texture2D.whiteTexture);
+        for (var c = 0; c < displayCount; c++)
+        {
+            handle = new WaveformMeshJob
+            {
+                Samples      = _displaySamples,
+                FrameCount   = _displayFrameCount,
+                Channels     = _displayChannels,
+                ChannelIndex = c,
+                PixelCount   = w,
+                YOffset      = c * channelH,
+                Height       = channelH,
+                VertexBase   = c * w * 4,
+                WaveColor    = waveColor,
+                Vertices     = _waveformVertices,
+                Indices      = _waveformIndices.GetSubArray(c * w * 6, w * 6),
+            }.Schedule(w, 32, handle);
+        }
+
+        handle.Complete();
+
+        var mwd = ctx.Allocate(w * 4 * displayCount, w * 6 * displayCount, Texture2D.whiteTexture);
         mwd.SetAllVertices(_waveformVertices);
         mwd.SetAllIndices(_waveformIndices);
     }

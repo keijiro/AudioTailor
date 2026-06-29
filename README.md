@@ -1,5 +1,7 @@
 # Audio Tailor
 
+<p><img width="412" height="445" alt="Screenshot 2026-06-29 at 6 47 06 PM" src="https://github.com/user-attachments/assets/354cdc1b-1014-4534-beaf-a221fb0cfc75" /></p>
+
 **Audio Tailor** is a Unity Editor tool for processing audio clips.
 
 ## How to Use

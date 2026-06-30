@@ -17,6 +17,7 @@
     "changelog": "<b>Added</b><br>- Stereo waveform display: up to two channels are shown as separate waveforms."
   },
   "dependencies": {
+    "com.unity.modules.audio": "1.0.0",
     "com.unity.burst": "1.8.29",
     "com.unity.collections": "2.6.6",
     "com.unity.mathematics": "1.3.3"

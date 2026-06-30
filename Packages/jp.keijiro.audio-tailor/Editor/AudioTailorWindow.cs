@@ -247,15 +247,10 @@ sealed class AudioTailorWindow : EditorWindow
         }
         else if (_sourceClip != null)
         {
-            var count = _sourceClip.samples * _sourceClip.channels;
-            _displaySamples = new NativeArray<float>(count, Allocator.Persistent);
-            if (!_sourceClip.GetData(_displaySamples.AsSpan(), 0))
+            var raw = AudioProcessor.LoadFromClip(_sourceClip);
+            if (raw.IsCreated)
             {
-                _displaySamples.Dispose();
-                _displaySamples = default;
-            }
-            else
-            {
+                _displaySamples    = raw;
                 _displayFrameCount = _sourceClip.samples;
                 _displayChannels   = _sourceClip.channels;
             }

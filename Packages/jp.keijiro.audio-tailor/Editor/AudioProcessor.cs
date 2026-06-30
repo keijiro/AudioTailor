@@ -139,9 +139,7 @@ static class AudioProcessor
         var samples = LoadFromClip(clip);
         if (!samples.IsCreated)
         {
-            EditorUtility.DisplayDialog("Audio Tailor",
-                "Failed to read audio data. The clip may be compressed or streaming.",
-                "OK");
+            EditorUtility.DisplayDialog("Audio Tailor", "Failed to read audio data.", "OK");
             return (default, 0, 0);
         }
 
@@ -196,12 +194,45 @@ static class AudioProcessor
 
     // Private processing steps
 
-    static NativeArray<float> LoadFromClip(AudioClip clip)
+    internal static NativeArray<float> LoadFromClip(AudioClip clip)
     {
-        var samples = new NativeArray<float>(clip.samples * clip.channels, Allocator.Persistent);
-        if (clip.GetData(samples.AsSpan(), 0)) return samples;
-        samples.Dispose();
-        return default;
+        var count = clip.samples * clip.channels;
+
+        var assetPath = AssetDatabase.GetAssetPath(clip);
+        var importer  = string.IsNullOrEmpty(assetPath) ? null
+                        : AssetImporter.GetAtPath(assetPath) as AudioImporter;
+
+        var needsReimport = importer != null &&
+            importer.defaultSampleSettings.loadType != AudioClipLoadType.DecompressOnLoad;
+
+        if (!needsReimport)
+        {
+            var samples = new NativeArray<float>(count, Allocator.Persistent);
+            if (clip.GetData(samples.AsSpan(), 0)) return samples;
+            samples.Dispose();
+            return default;
+        }
+
+        // Clip is compressed or streaming — temporarily reimport as DecompressOnLoad
+        var originalSettings = importer.defaultSampleSettings;
+        try
+        {
+            var tempSettings = originalSettings;
+            tempSettings.loadType = AudioClipLoadType.DecompressOnLoad;
+            importer.defaultSampleSettings = tempSettings;
+            importer.SaveAndReimport();
+
+            var decompressed = AssetDatabase.LoadAssetAtPath<AudioClip>(assetPath);
+            var result = new NativeArray<float>(count, Allocator.Persistent);
+            if (decompressed != null && decompressed.GetData(result.AsSpan(), 0)) return result;
+            result.Dispose();
+            return default;
+        }
+        finally
+        {
+            importer.defaultSampleSettings = originalSettings;
+            importer.SaveAndReimport();
+        }
     }
 
     static NativeArray<float> ToMono(NativeArray<float> interleaved, int channels, int frameCount)
